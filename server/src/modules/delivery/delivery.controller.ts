@@ -22,9 +22,9 @@ export class DeliveryController {
     return this.service.create(dto.contract_id, dto, user.id);
   }
 
-  @Post(':id/after-sale') @Permissions('delivery:install')
-  recordAfterSale(@Param('id') id: number, @Body() dto: AfterSaleDto, @CurrentUser() user: any) {
-    return this.service.recordAfterSale(id, dto, user.id);
+  @Post('after-sale/:contractId') @Permissions('delivery:install')
+  recordAfterSale(@Param('contractId') contractId: number, @Body() dto: AfterSaleDto, @CurrentUser() user: any) {
+    return this.service.recordAfterSale(contractId, dto, user.id);
   }
 
   @Get('after-sale/:contractId') @Permissions('delivery:install')

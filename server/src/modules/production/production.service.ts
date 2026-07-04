@@ -142,8 +142,19 @@ export class ProductionService {
 
   // 质检退回
   async qcReject(id: number, userId: number, remark: string): Promise<ProductionOrder> {
-    const order = await this.orderRepo.findOneBy({ id });
+    const order = await this.orderRepo.findOne({
+      where: { id },
+      relations: ['items'],
+    });
     if (!order || order.status !== 'completed') throw new BadRequestException('工单状态不正确');
+    // 更新所有生产项质检状态为 reject
+    for (const item of order.items) {
+      item.qc_status = 'reject';
+      item.qc_operator_id = userId;
+      item.qc_at = new Date();
+      item.qc_remark = remark;
+    }
+    await this.itemRepo.save(order.items);
     order.status = 'in_progress'; // 退回生产
     await this.orderRepo.save(order);
     await this.logOp(id, userId, 'qc_reject', remark);

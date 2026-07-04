@@ -49,6 +49,14 @@ export class DeliveryService {
     const contract = await this.contractRepo.findOneBy({ id: contractId });
     if (!contract) throw new NotFoundException('合同不存在');
 
+    // 检查库存是否充足
+    for (const item of dto.items) {
+      const inv = await this.invRepo.findOne({ where: { product_id: item.product_id } });
+      if (!inv || inv.quantity < item.quantity) {
+        throw new BadRequestException(`产品 ${item.product_id} 库存不足（需要 ${item.quantity}，现有 ${inv?.quantity ?? 0}）`);
+      }
+    }
+
     const delivery = this.deliveryRepo.create({
       contract_id: contractId,
       logistics_company: dto.logistics_company,
@@ -65,7 +73,7 @@ export class DeliveryService {
       const inv = await this.invRepo.findOne({ where: { product_id: item.product_id } });
       if (inv) {
         const before = inv.quantity;
-        inv.quantity = Math.max(0, inv.quantity - item.quantity);
+        inv.quantity -= item.quantity;
         await this.invRepo.save(inv);
         await this.invLogRepo.save({
           product_id: item.product_id,
