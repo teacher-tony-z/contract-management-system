@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus';
 
 interface InventoryItem {
   id: number;
-  product: { model: string; name: string };
+  product: { model: string; name: string } | null;
   quantity: number;
   location: string;
   updatedAt: string;
@@ -13,6 +13,7 @@ interface InventoryItem {
 
 const inventoryList = ref<InventoryItem[]>([]);
 const loading = ref(false);
+
 const adjustDialogVisible = ref(false);
 const currentItem = ref<InventoryItem | null>(null);
 const adjustQuantity = ref(0);
@@ -35,7 +36,8 @@ const showAdjust = (row: InventoryItem) => {
 };
 
 const handleAdjust = async () => {
-  if (!currentItem.value || adjustQuantity.value === 0) {
+  if (!currentItem.value) return;
+  if (adjustQuantity.value === 0) {
     ElMessage.warning('调整数量不能为0');
     return;
   }
@@ -46,7 +48,7 @@ const handleAdjust = async () => {
     });
     ElMessage.success('库存调整成功');
     adjustDialogVisible.value = false;
-    fetchList();
+    await fetchList();
   } finally {
     adjusting.value = false;
   }
@@ -58,21 +60,34 @@ onMounted(fetchList);
 <template>
   <div>
     <h2>库存管理</h2>
+
     <el-table :data="inventoryList" border stripe v-loading="loading">
-      <el-table-column label="产品型号" prop="product.model" />
-      <el-table-column label="产品名称" prop="product.name" />
-      <el-table-column label="库存数量" width="120">
+      <el-table-column label="产品型号" width="160">
         <template #default="{ row }">
-          <el-tag :type="row.quantity > 0 ? 'success' : 'danger'">
+          {{ row.product?.model || '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column label="产品名称" min-width="160">
+        <template #default="{ row }">
+          {{ row.product?.name || '-' }}
+        </template>
+      </el-table-column>
+      <el-table-column label="库存数量" width="120" align="center">
+        <template #default="{ row }">
+          <el-tag :type="row.quantity > 0 ? 'success' : 'danger'" effect="plain">
             {{ row.quantity }}
           </el-tag>
         </template>
       </el-table-column>
       <el-table-column label="库位" prop="location" width="150" />
       <el-table-column label="最后更新" prop="updatedAt" width="180" />
-      <el-table-column label="操作" width="160" fixed="right">
+      <el-table-column label="操作" width="120" fixed="right">
         <template #default="{ row }">
-          <el-button size="small" v-permission="'inventory:update'" @click="showAdjust(row)">
+          <el-button
+            size="small"
+            v-permission="'inventory:update'"
+            @click="showAdjust(row)"
+          >
             调整库存
           </el-button>
         </template>
@@ -80,16 +95,24 @@ onMounted(fetchList);
     </el-table>
 
     <el-dialog v-model="adjustDialogVisible" title="调整库存" width="420px">
-      <el-form label-width="90px">
+      <el-form label-width="100px">
         <el-form-item label="产品型号">
-          <el-input :model-value="currentItem?.product?.model" disabled />
+          <el-input :model-value="currentItem?.product?.model || ''" disabled />
         </el-form-item>
         <el-form-item label="当前库存">
-          <el-input :model-value="currentItem?.quantity" disabled />
+          <el-input :model-value="currentItem?.quantity ?? 0" disabled />
         </el-form-item>
         <el-form-item label="调整数量">
-          <el-input-number v-model="adjustQuantity" :min="-99999" :max="99999" />
-          <span style="margin-left: 8px; font-size: 12px; color: #999;">正数增加，负数减少</span>
+          <el-input-number
+            v-model="adjustQuantity"
+            :min="-99999"
+            :max="99999"
+            controls-position="right"
+            style="width: 200px"
+          />
+          <span style="margin-left: 8px; font-size: 12px; color: #999;">
+            正数增加，负数减少
+          </span>
         </el-form-item>
       </el-form>
       <template #footer>
