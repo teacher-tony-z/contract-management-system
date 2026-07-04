@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Put, Param, Body, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
 import { Permissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { ProductionService } from './production.service';
@@ -7,7 +8,7 @@ import { CreateProductionDto } from './dto/create-production.dto';
 import { QcDto } from './dto/qc.dto';
 
 @Controller('production')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 export class ProductionController {
   constructor(private service: ProductionService) {}
 

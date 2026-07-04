@@ -2,6 +2,8 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository, Like } from 'typeorm';
 import { EventEmitter2 } from '@nestjs/event-emitter';
+import * as fs from 'fs';
+import * as path from 'path';
 import { Contract } from './entities/contract.entity';
 import { ContractItem } from './entities/contract-item.entity';
 import { ContractOperation } from './entities/contract-operation.entity';
@@ -49,10 +51,10 @@ export class ContractsService {
   }
 
   // 角色过滤列表（按角色优先级：管理员 > 财务 > 生产 > 质检 > 销售）
-  async findAll(user: any): Promise<Contract[]> {
+  async findAll(user: any, filters?: { customer_name?: string; contract_no?: string; status?: string }): Promise<Contract[]> {
     const qb = this.contractRepo.createQueryBuilder('c')
       .leftJoinAndSelect('c.items', 'items')
-      .leftJoinAndSelect('c.items.product', 'product')
+      .leftJoinAndSelect('items.product', 'product')
       .leftJoinAndSelect('c.submitter', 'submitter')
       .orderBy('c.createdAt', 'DESC');
 
@@ -68,7 +70,18 @@ export class ContractsService {
     } else if (user.roles.includes('销售')) {
       qb.where('c.submitter_id = :uid', { uid: user.id });
     }
-    // 无匹配角色时返回空列表
+
+    // 搜索过滤
+    if (filters?.contract_no) {
+      qb.andWhere('c.contract_no LIKE :contractNo', { contractNo: `%${filters.contract_no}%` });
+    }
+    if (filters?.customer_name) {
+      qb.andWhere('c.customer_name LIKE :customerName', { customerName: `%${filters.customer_name}%` });
+    }
+    if (filters?.status) {
+      qb.andWhere('c.status = :status', { status: filters.status });
+    }
+
     return qb.getMany();
   }
 
@@ -77,6 +90,7 @@ export class ContractsService {
     const contract = await this.contractRepo.findOne({
       where: { id },
       relations: ['items', 'items.product', 'submitter', 'attachments', 'operations'],
+      relationLoadStrategy: 'query',
     });
     if (!contract) throw new NotFoundException('合同不存在');
     return contract;
@@ -234,5 +248,73 @@ export class ContractsService {
       where: { contract_id: contractId },
       order: { createdAt: 'DESC' },
     });
+  }
+
+  // ===== 附件管理 =====
+
+  async uploadAttachment(contractId: number, file: any, userId: number): Promise<ContractAttachment> {
+    const contract = await this.contractRepo.findOneBy({ id: contractId });
+    if (!contract) throw new NotFoundException('合同不存在');
+
+    const ext = path.extname(file.originalname);
+    const savedName = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+    const uploadDir = path.resolve(__dirname, '../../../uploads');
+    if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
+    const filePath = path.join(uploadDir, savedName);
+    fs.writeFileSync(filePath, file.buffer);
+
+    const attachment = this.attRepo.create({
+      contract_id: contractId,
+      file_name: file.originalname,
+      file_path: savedName,
+      uploader_id: userId,
+    });
+    const saved = await this.attRepo.save(attachment);
+    await this.logOperation(contractId, userId, 'upload_attachment', file.originalname);
+    return saved;
+  }
+
+  async getAttachments(contractId: number): Promise<ContractAttachment[]> {
+    return this.attRepo.find({
+      where: { contract_id: contractId },
+      relations: ['uploader'],
+      order: { createdAt: 'DESC' },
+    });
+  }
+
+  async getAttachmentFile(id: number): Promise<{ file: Buffer; name: string; mime: string }> {
+    const att = await this.attRepo.findOneBy({ id });
+    if (!att) throw new NotFoundException('附件不存在');
+    const uploadDir = path.resolve(__dirname, '../../../uploads');
+    const filePath = path.join(uploadDir, att.file_path);
+    if (!fs.existsSync(filePath)) throw new NotFoundException('文件已丢失');
+    const ext = path.extname(att.file_name).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.pdf': 'application/pdf',
+      '.doc': 'application/msword',
+      '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      '.xls': 'application/vnd.ms-excel',
+      '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      '.jpg': 'image/jpeg',
+      '.jpeg': 'image/jpeg',
+      '.png': 'image/png',
+      '.zip': 'application/zip',
+      '.rar': 'application/vnd.rar',
+    };
+    return {
+      file: fs.readFileSync(filePath),
+      name: att.file_name,
+      mime: mimeMap[ext] || 'application/octet-stream',
+    };
+  }
+
+  async deleteAttachment(id: number, userId: number): Promise<void> {
+    const att = await this.attRepo.findOneBy({ id });
+    if (!att) throw new NotFoundException('附件不存在');
+    const uploadDir = path.resolve(__dirname, '../../../uploads');
+    const filePath = path.join(uploadDir, att.file_path);
+    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+    await this.attRepo.remove(att);
+    await this.logOperation(att.contract_id, userId, 'delete_attachment', att.file_name);
   }
 }

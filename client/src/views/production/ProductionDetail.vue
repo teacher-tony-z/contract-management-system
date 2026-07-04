@@ -43,6 +43,9 @@ const handleComplete = async () => {
 <template>
   <div v-if="store.current" class="production-detail">
     <div class="detail-header">
+      <el-button @click="$router.back()" text>
+        <el-icon><ArrowLeft /></el-icon>返回列表
+      </el-button>
       <h2>工单 #{{ store.current.id }}</h2>
       <el-tag :type="(statusMap[store.current.status]?.type as any)">
         {{ statusMap[store.current.status]?.label || store.current.status }}

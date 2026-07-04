@@ -1,5 +1,6 @@
 import { Controller, Get, Post, Param, Body, UseGuards } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { PermissionGuard } from '../auth/guards/permission.guard';
 import { Permissions } from '../auth/decorators/permissions.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { DeliveryService } from './delivery.service';
@@ -7,7 +8,7 @@ import { CreateDeliveryDto } from './dto/create-delivery.dto';
 import { AfterSaleDto } from './dto/after-sale.dto';
 
 @Controller('delivery')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, PermissionGuard)
 export class DeliveryController {
   constructor(private service: DeliveryService) {}
 

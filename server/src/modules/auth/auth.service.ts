@@ -49,7 +49,7 @@ export class AuthService {
   private async getUserPermissions(userId: number): Promise<string[]> {
     const result = await this.userRoleRepo.find({
       where: { user_id: userId },
-      relations: ['role', 'role.rolePermissions', 'role.rolePermissions.permission'],
+      relations: ['role'],
     });
     const permSet = new Set<string>();
     for (const ur of result) {
