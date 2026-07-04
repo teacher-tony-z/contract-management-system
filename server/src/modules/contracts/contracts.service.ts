@@ -48,23 +48,27 @@ export class ContractsService {
     return this.contractRepo.save(contract);
   }
 
-  // 角色过滤列表
+  // 角色过滤列表（按角色优先级：管理员 > 财务 > 生产 > 质检 > 销售）
   async findAll(user: any): Promise<Contract[]> {
     const qb = this.contractRepo.createQueryBuilder('c')
       .leftJoinAndSelect('c.items', 'items')
       .leftJoinAndSelect('c.items.product', 'product')
       .leftJoinAndSelect('c.submitter', 'submitter')
       .orderBy('c.createdAt', 'DESC');
-    if (user.roles.includes('销售')) {
-      qb.where('c.submitter_id = :uid', { uid: user.id });
+
+    // 按角色优先级决定过滤条件
+    if (user.roles.includes('管理员')) {
+      // 管理员看到全部
     } else if (user.roles.includes('财务')) {
       qb.where("c.status IN ('pending', 'approved', 'returned')");
     } else if (user.roles.includes('生产')) {
       qb.where("c.status IN ('approved', 'production', 'shipped', 'installing')");
     } else if (user.roles.includes('质检')) {
       qb.where("c.status IN ('production', 'shipped')");
+    } else if (user.roles.includes('销售')) {
+      qb.where('c.submitter_id = :uid', { uid: user.id });
     }
-    // 管理员看到全部
+    // 无匹配角色时返回空列表
     return qb.getMany();
   }
 
@@ -125,6 +129,7 @@ export class ContractsService {
       contract.status = 'approved';
       contract.reviewer_id = userId;
       contract.review_at = new Date();
+      contract.review_remark = ''; // 清除上次退回原因
       await this.contractRepo.save(contract);
       await this.logOperation(id, userId, 'audit_pass', dto.remark);
       // 触发事件：生产模块监听
@@ -138,7 +143,7 @@ export class ContractsService {
     return contract;
   }
 
-  // 变更合同（生成新合同，原合同作废）
+  // 变更合同（生成新合同，原合同作废）— 使用事务保证数据一致性
   async change(id: number, userId: number, dto: ChangeContractDto): Promise<Contract> {
     const original = await this.contractRepo.findOne({
       where: { id },
@@ -146,33 +151,51 @@ export class ContractsService {
     });
     if (!original) throw new NotFoundException('合同不存在');
 
-    // 原合同作废
-    original.status = 'cancelled';
-    original.is_latest = false;
-    await this.contractRepo.save(original);
+    // 使用事务包装多个写操作
+    const queryRunner = this.contractRepo.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      // 原合同作废
+      original.status = 'cancelled';
+      original.is_latest = false;
+      await queryRunner.manager.save(original);
 
-    // 创建新合同
-    const newContract = this.contractRepo.create({
-      customer_name: dto.customer_name,
-      customer_phone: dto.customer_phone,
-      customer_address: dto.customer_address,
-      status: 'draft',
-      submitter_id: userId,
-    });
-    newContract.contract_no = await this.generateContractNo();
-    newContract.items = dto.items.map(item => this.itemRepo.create(item));
-    const saved = await this.contractRepo.save(newContract);
+      // 创建新合同
+      const newContract = this.contractRepo.create({
+        customer_name: dto.customer_name,
+        customer_phone: dto.customer_phone,
+        customer_address: dto.customer_address,
+        status: 'draft',
+        submitter_id: userId,
+      });
+      newContract.contract_no = await this.generateContractNo();
+      newContract.items = dto.items.map(item => this.itemRepo.create(item));
+      const saved = await queryRunner.manager.save(newContract);
 
-    // 记录版本关联
-    await this.verRepo.save({
-      original_id: id,
-      new_id: saved.id,
-      change_reason: dto.change_reason,
-      changed_by: userId,
-    });
+      // 记录版本关联
+      await queryRunner.manager.save(ContractVersion, {
+        original_id: id,
+        new_id: saved.id,
+        change_reason: dto.change_reason,
+        changed_by: userId,
+      });
 
-    await this.logOperation(id, userId, 'change', dto.change_reason);
-    return saved;
+      await queryRunner.manager.save(ContractOperation, {
+        contract_id: id,
+        operator_id: userId,
+        action: 'change',
+        remark: dto.change_reason,
+      });
+
+      await queryRunner.commitTransaction();
+      return saved;
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+      throw err;
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   // 交付确认：installing → delivered
