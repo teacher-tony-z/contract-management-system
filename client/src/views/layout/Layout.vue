@@ -1,12 +1,15 @@
 <script setup lang="ts">
 import Sidebar from './Sidebar.vue';
 import Navbar from './Navbar.vue';
+import { useAppStore } from '@/stores/app';
+
+const appStore = useAppStore();
 </script>
 
 <template>
   <div class="layout-container">
     <Sidebar />
-    <div class="layout-main">
+    <div class="layout-main" :style="{ marginLeft: appStore.sidebarCollapsed ? '64px' : '200px' }">
       <Navbar />
       <div class="layout-content">
         <router-view />
@@ -24,7 +27,6 @@ import Navbar from './Navbar.vue';
   flex: 1;
   display: flex;
   flex-direction: column;
-  margin-left: 200px;
   transition: margin-left 0.3s;
 }
 .layout-content {
