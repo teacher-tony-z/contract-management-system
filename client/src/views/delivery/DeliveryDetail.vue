@@ -2,7 +2,6 @@
 import { onMounted, ref } from 'vue';
 import { useRoute } from 'vue-router';
 import request from '@/utils/request';
-import { ElMessage } from 'element-plus';
 import AfterSaleForm from './components/AfterSaleForm.vue';
 
 interface DeliveryItem {
