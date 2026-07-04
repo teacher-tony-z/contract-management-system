@@ -21,6 +21,7 @@ const routes = [
       { path: 'inventory', component: () => import('@/views/inventory/InventoryList.vue'), meta: { permission: 'inventory:view' } },
       // 交付
       { path: 'delivery', component: () => import('@/views/delivery/DeliveryList.vue'), meta: { permission: 'delivery:ship' } },
+      { path: 'delivery/create', component: () => import('@/views/delivery/DeliveryForm.vue'), meta: { permission: 'delivery:ship' } },
       { path: 'delivery/:id', component: () => import('@/views/delivery/DeliveryDetail.vue'), meta: { permission: 'delivery:ship' } },
       // 系统管理
       { path: 'users', component: () => import('@/views/system/UserList.vue'), meta: { permission: 'system:admin' } },
