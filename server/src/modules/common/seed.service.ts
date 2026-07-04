@@ -105,6 +105,27 @@ export class SeedService implements OnModuleInit {
     const adminRoleId = roleMap.get('管理员')!;
     await this.urRepo.save({ user_id: admin.id, role_id: adminRoleId });
 
-    console.log('Seed data created: 1 admin user, 5 roles, 20 permissions');
+    // Create test accounts for each role
+    const testAccounts = [
+      { username: 'sales1', real_name: '销售员张', role: '销售' },
+      { username: 'finance1', real_name: '财务李', role: '财务' },
+      { username: 'prod1', real_name: '生产王', role: '生产' },
+      { username: 'qc1', real_name: '质检赵', role: '质检' },
+    ];
+    for (const acct of testAccounts) {
+      const existing = await this.userRepo.findOne({ where: { username: acct.username } });
+      if (!existing) {
+        const user = await this.userRepo.save({
+          username: acct.username,
+          password_hash: await bcrypt.hash('123456', 10),
+          real_name: acct.real_name,
+        });
+        const roleId = roleMap.get(acct.role);
+        if (roleId) {
+          await this.urRepo.save({ user_id: user.id, role_id: roleId });
+        }
+      }
+    }
+    console.log('Test accounts created: sales1, finance1, prod1, qc1');
   }
 }
