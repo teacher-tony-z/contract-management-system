@@ -1,6 +1,14 @@
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventEmitterModule } from '@nestjs/event-emitter';
+import { AuthModule } from './modules/auth/auth.module';
+import { RolesModule } from './modules/roles/roles.module';
+import { ProductsModule } from './modules/products/products.module';
+import { ContractsModule } from './modules/contracts/contracts.module';
+import { InventoryModule } from './modules/inventory/inventory.module';
+import { ProductionModule } from './modules/production/production.module';
+import { DeliveryModule } from './modules/delivery/delivery.module';
+import { CommonModule } from './modules/common/common.module';
 
 @Module({
   imports: [
@@ -12,9 +20,17 @@ import { EventEmitterModule } from '@nestjs/event-emitter';
       password: process.env.DB_PASSWORD || 'postgres',
       database: process.env.DB_NAME || 'contract_db',
       autoLoadEntities: true,
-      synchronize: true, // dev only
+      synchronize: true,
     }),
     EventEmitterModule.forRoot(),
+    AuthModule,
+    RolesModule,
+    ProductsModule,
+    ContractsModule,
+    InventoryModule,
+    ProductionModule,
+    DeliveryModule,
+    CommonModule,
   ],
 })
 export class AppModule {}
