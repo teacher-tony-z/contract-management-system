@@ -8,6 +8,8 @@ import { ProductionLog } from './entities/production-log.entity';
 import { Contract } from '../contracts/entities/contract.entity';
 import { Inventory } from '../inventory/entities/inventory.entity';
 import { InventoryLog } from '../inventory/entities/inventory-log.entity';
+import { ContractStatus, assertTransition } from '../contracts/contract-state-machine';
+import { ContractEvents, ProductionEvents } from '../../common/events';
 
 @Injectable()
 export class ProductionService {
@@ -42,14 +44,13 @@ export class ProductionService {
   }
 
   // 监听合同审核通过
-  @OnEvent('contract.approved')
+  @OnEvent(ContractEvents.APPROVED)
   async handleContractApproved(payload: { contractId: number }) {
-    // 实际生产中，生产部门手动创建工单，这里先不做自动创建
     console.log(`合同 ${payload.contractId} 已审批通过，等待生产部门处理`);
   }
 
   // 监听 QC 通过 — 自动增加库存
-  @OnEvent('qc.passed')
+  @OnEvent(ProductionEvents.QC_PASSED)
   async handleQCPassed(payload: { orderId: number; contractId: number }) {
     const items = await this.itemRepo.find({ where: { order_id: payload.orderId } });
     for (const item of items) {
@@ -68,20 +69,21 @@ export class ProductionService {
         quantity_after: inv.quantity,
         reference_type: 'production',
         reference_id: payload.orderId,
-        operator_id: 0, // 系统操作
+        operator_id: 0,
       });
     }
   }
 
-  // 创建工单
+  // 创建工单（仅 approved 状态的合同可创建）
   async create(contractId: number, userId: number): Promise<ProductionOrder> {
     const contract = await this.contractRepo.findOne({
       where: { id: contractId },
       relations: ['items'],
     });
     if (!contract) throw new NotFoundException('合同不存在');
-    // 更新合同状态为 production
-    contract.status = 'production';
+    assertTransition(contract.status, ContractStatus.PRODUCTION);
+
+    contract.status = ContractStatus.PRODUCTION;
     await this.contractRepo.save(contract);
 
     const order = this.orderRepo.create({
@@ -116,7 +118,7 @@ export class ProductionService {
     order.completed_at = new Date();
     await this.orderRepo.save(order);
     await this.logOp(id, userId, 'complete');
-    this.eventEmitter.emit('production.completed', { orderId: id, contractId: order.contract_id });
+    this.eventEmitter.emit(ProductionEvents.COMPLETED, { orderId: id, contractId: order.contract_id });
     return order;
   }
 
@@ -127,7 +129,6 @@ export class ProductionService {
       relations: ['items'],
     });
     if (!order || order.status !== 'completed') throw new BadRequestException('工单状态不正确');
-    // 更新所有生产项质检状态
     for (const item of order.items) {
       item.qc_status = 'pass';
       item.qc_operator_id = userId;
@@ -136,7 +137,7 @@ export class ProductionService {
     }
     await this.itemRepo.save(order.items);
     await this.logOp(id, userId, 'qc_pass', remark);
-    this.eventEmitter.emit('qc.passed', { orderId: id, contractId: order.contract_id });
+    this.eventEmitter.emit(ProductionEvents.QC_PASSED, { orderId: id, contractId: order.contract_id });
     return order;
   }
 
@@ -147,7 +148,6 @@ export class ProductionService {
       relations: ['items'],
     });
     if (!order || order.status !== 'completed') throw new BadRequestException('工单状态不正确');
-    // 更新所有生产项质检状态为 reject
     for (const item of order.items) {
       item.qc_status = 'reject';
       item.qc_operator_id = userId;
@@ -155,10 +155,10 @@ export class ProductionService {
       item.qc_remark = remark;
     }
     await this.itemRepo.save(order.items);
-    order.status = 'in_progress'; // 退回生产
+    order.status = 'in_progress';
     await this.orderRepo.save(order);
     await this.logOp(id, userId, 'qc_reject', remark);
-    this.eventEmitter.emit('qc.rejected', { orderId: id, contractId: order.contract_id });
+    this.eventEmitter.emit(ProductionEvents.QC_REJECTED, { orderId: id, contractId: order.contract_id });
     return order;
   }
 

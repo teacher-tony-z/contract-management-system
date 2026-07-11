@@ -27,6 +27,20 @@
 | prod1 | 123456 | 生产 |
 | qc1 | 123456 | 质检 |
 
+## 生产部署
+
+生产环境使用 Docker + Nginx 部署，支持 Windows Server 和 Linux。
+
+```powershell
+# Windows Server（管理员 PowerShell）
+.\deploy\deploy.ps1
+
+# 或 Linux
+HTTP_PORT=80 docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+详细部署说明请见 [deploy/README.md](deploy/README.md)。
+
 ## 项目结构
 
 ```

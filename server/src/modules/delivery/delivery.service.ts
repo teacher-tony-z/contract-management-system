@@ -9,6 +9,7 @@ import { Inventory } from '../inventory/entities/inventory.entity';
 import { InventoryLog } from '../inventory/entities/inventory-log.entity';
 import { CreateDeliveryDto } from './dto/create-delivery.dto';
 import { AfterSaleDto } from './dto/after-sale.dto';
+import { ContractStatus, assertTransition } from '../contracts/contract-state-machine';
 
 @Injectable()
 export class DeliveryService {
@@ -89,7 +90,8 @@ export class DeliveryService {
     }
 
     // 更新合同状态
-    contract.status = 'shipped';
+    assertTransition(contract.status, ContractStatus.SHIPPED);
+    contract.status = ContractStatus.SHIPPED;
     contract.delivery_at = new Date();
     await this.contractRepo.save(contract);
 
@@ -110,7 +112,8 @@ export class DeliveryService {
     });
 
     // 合同 → installing
-    contract.status = 'installing';
+    assertTransition(contract.status, ContractStatus.INSTALLING);
+    contract.status = ContractStatus.INSTALLING;
     contract.after_sale_at = new Date();
     await this.contractRepo.save(contract);
 

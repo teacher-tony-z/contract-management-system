@@ -12,6 +12,13 @@ import { ContractVersion } from './entities/contract-version.entity';
 import { CreateContractDto } from './dto/create-contract.dto';
 import { AuditContractDto } from './dto/audit-contract.dto';
 import { ChangeContractDto } from './dto/change-contract.dto';
+import {
+  assertTransition,
+  assertEditable,
+  assertTerminable,
+  ContractStatus,
+} from './contract-state-machine';
+import { ContractEvents } from '../../common/events';
 
 @Injectable()
 export class ContractsService {
@@ -37,20 +44,8 @@ export class ContractsService {
     return `${prefix}${seq}`;
   }
 
-  // 创建合同
-  async create(dto: CreateContractDto, userId: number): Promise<Contract> {
-    const contractNo = await this.generateContractNo();
-    const contract = this.contractRepo.create({
-      contract_no: contractNo,
-      ...dto,
-      status: 'draft',
-      submitter_id: userId,
-    });
-    contract.items = dto.items.map(item => this.itemRepo.create(item));
-    return this.contractRepo.save(contract);
-  }
+  // ========== 查询方法 ==========
 
-  // 角色过滤列表（按角色优先级：管理员 > 财务 > 生产 > 质检 > 销售）
   async findAll(user: any, filters?: { customer_name?: string; contract_no?: string; status?: string }): Promise<Contract[]> {
     const qb = this.contractRepo.createQueryBuilder('c')
       .leftJoinAndSelect('c.items', 'items')
@@ -58,7 +53,6 @@ export class ContractsService {
       .leftJoinAndSelect('c.submitter', 'submitter')
       .orderBy('c.createdAt', 'DESC');
 
-    // 按角色优先级决定过滤条件
     if (user.roles.includes('管理员')) {
       // 管理员看到全部
     } else if (user.roles.includes('财务')) {
@@ -71,7 +65,6 @@ export class ContractsService {
       qb.where('c.submitter_id = :uid', { uid: user.id });
     }
 
-    // 搜索过滤
     if (filters?.contract_no) {
       qb.andWhere('c.contract_no LIKE :contractNo', { contractNo: `%${filters.contract_no}%` });
     }
@@ -85,7 +78,6 @@ export class ContractsService {
     return qb.getMany();
   }
 
-  // 查询单个合同
   async findOne(id: number): Promise<Contract> {
     const contract = await this.contractRepo.findOne({
       where: { id },
@@ -96,16 +88,29 @@ export class ContractsService {
     return contract;
   }
 
+  // ========== 写操作 ==========
+
+  // 创建合同
+  async create(dto: CreateContractDto, userId: number): Promise<Contract> {
+    const contractNo = await this.generateContractNo();
+    const contract = this.contractRepo.create({
+      contract_no: contractNo,
+      ...dto,
+      status: ContractStatus.DRAFT,
+      submitter_id: userId,
+    });
+    contract.items = dto.items.map(item => this.itemRepo.create(item));
+    return this.contractRepo.save(contract);
+  }
+
   // 更新合同（草稿状态）
   async update(id: number, dto: CreateContractDto, userId: number): Promise<Contract> {
     const contract = await this.contractRepo.findOne({ where: { id }, relations: ['items'] });
     if (!contract) throw new NotFoundException('合同不存在');
-    if (contract.status !== 'draft') throw new BadRequestException('只能编辑草稿状态的合同');
+    assertEditable(contract.status);
 
-    // 移除旧条目
     if (contract.items?.length) await this.itemRepo.remove(contract.items);
 
-    // 更新字段
     contract.customer_name = dto.customer_name;
     contract.customer_phone = (dto.customer_phone ?? '') as string;
     contract.customer_address = (dto.customer_address ?? '') as string;
@@ -118,17 +123,19 @@ export class ContractsService {
   async remove(id: number): Promise<void> {
     const contract = await this.contractRepo.findOne({ where: { id }, relations: ['items'] });
     if (!contract) throw new NotFoundException('合同不存在');
-    if (contract.status !== 'draft') throw new BadRequestException('只能删除草稿状态的合同');
+    assertEditable(contract.status);
 
     if (contract.items?.length) await this.itemRepo.remove(contract.items);
     await this.contractRepo.remove(contract);
   }
 
-  // 提交审核：draft → pending
+  // 提交审核：draft → pending / returned → pending
   async submit(id: number, userId: number): Promise<Contract> {
     const contract = await this.contractRepo.findOneBy({ id });
-    if (!contract || contract.status !== 'draft') throw new BadRequestException('合同状态不正确');
-    contract.status = 'pending';
+    if (!contract) throw new BadRequestException('合同状态不正确');
+
+    assertTransition(contract.status, ContractStatus.PENDING);
+    contract.status = ContractStatus.PENDING;
     contract.submit_at = new Date();
     await this.contractRepo.save(contract);
     await this.logOperation(id, userId, 'submit');
@@ -138,18 +145,20 @@ export class ContractsService {
   // 审核：pending → approved 或 returned
   async audit(id: number, userId: number, dto: AuditContractDto): Promise<Contract> {
     const contract = await this.contractRepo.findOneBy({ id });
-    if (!contract || contract.status !== 'pending') throw new BadRequestException('合同状态不正确');
+    if (!contract) throw new BadRequestException('合同状态不正确');
+
     if (dto.action === 'pass') {
-      contract.status = 'approved';
+      assertTransition(contract.status, ContractStatus.APPROVED);
+      contract.status = ContractStatus.APPROVED;
       contract.reviewer_id = userId;
       contract.review_at = new Date();
-      contract.review_remark = ''; // 清除上次退回原因
+      contract.review_remark = '';
       await this.contractRepo.save(contract);
       await this.logOperation(id, userId, 'audit_pass', dto.remark);
-      // 触发事件：生产模块监听
-      this.eventEmitter.emit('contract.approved', { contractId: id });
+      this.eventEmitter.emit(ContractEvents.APPROVED, { contractId: id });
     } else {
-      contract.status = 'returned';
+      assertTransition(contract.status, ContractStatus.RETURNED);
+      contract.status = ContractStatus.RETURNED;
       contract.review_remark = dto.remark || '';
       await this.contractRepo.save(contract);
       await this.logOperation(id, userId, 'audit_reject', dto.remark);
@@ -165,29 +174,28 @@ export class ContractsService {
     });
     if (!original) throw new NotFoundException('合同不存在');
 
-    // 使用事务包装多个写操作
+    // 变更可视为"强制终止原合同并创建新合同"，原合同只要不是终态都可变更
+    assertTerminable(original.status);
+
     const queryRunner = this.contractRepo.manager.connection.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
-      // 原合同作废
-      original.status = 'cancelled';
+      original.status = ContractStatus.CANCELLED;
       original.is_latest = false;
       await queryRunner.manager.save(original);
 
-      // 创建新合同
       const newContract = this.contractRepo.create({
         customer_name: dto.customer_name,
         customer_phone: dto.customer_phone,
         customer_address: dto.customer_address,
-        status: 'draft',
+        status: ContractStatus.DRAFT,
         submitter_id: userId,
       });
       newContract.contract_no = await this.generateContractNo();
       newContract.items = dto.items.map(item => this.itemRepo.create(item));
       const saved = await queryRunner.manager.save(newContract);
 
-      // 记录版本关联
       await queryRunner.manager.save(ContractVersion, {
         original_id: id,
         new_id: saved.id,
@@ -215,34 +223,34 @@ export class ContractsService {
   // 交付确认：installing → delivered
   async complete(id: number, userId: number): Promise<Contract> {
     const contract = await this.contractRepo.findOneBy({ id });
-    if (!contract || contract.status !== 'installing') throw new BadRequestException('合同状态不正确');
-    contract.status = 'delivered';
+    if (!contract) throw new BadRequestException('合同状态不正确');
+    assertTransition(contract.status, ContractStatus.DELIVERED);
+    contract.status = ContractStatus.DELIVERED;
     contract.delivered_by = userId;
     await this.contractRepo.save(contract);
     await this.logOperation(id, userId, 'complete');
     return contract;
   }
 
-  // 终止合同：管理员操作
+  // 终止合同：管理员操作（任何非终态均可终止）
   async terminate(id: number, userId: number): Promise<Contract> {
     const contract = await this.contractRepo.findOneBy({ id });
-    if (!contract || ['delivered', 'cancelled'].includes(contract.status)) {
-      throw new BadRequestException('该合同无法终止');
-    }
-    contract.status = 'cancelled';
+    if (!contract) throw new BadRequestException('合同不存在');
+    assertTerminable(contract.status);
+    contract.status = ContractStatus.CANCELLED;
     contract.is_latest = false;
     await this.contractRepo.save(contract);
     await this.logOperation(id, userId, 'terminate');
-    this.eventEmitter.emit('contract.terminated', { contractId: id });
+    this.eventEmitter.emit(ContractEvents.TERMINATED, { contractId: id });
     return contract;
   }
 
-  // 记录操作日志
+  // ========== 操作日志 ==========
+
   private async logOperation(contractId: number, userId: number, action: string, remark?: string) {
     await this.opRepo.save({ contract_id: contractId, operator_id: userId, action, remark });
   }
 
-  // 获取操作记录
   async getOperations(contractId: number): Promise<ContractOperation[]> {
     return this.opRepo.find({
       where: { contract_id: contractId },
@@ -250,7 +258,7 @@ export class ContractsService {
     });
   }
 
-  // ===== 附件管理 =====
+  // ========== 附件管理 ==========
 
   async uploadAttachment(contractId: number, file: any, userId: number): Promise<ContractAttachment> {
     const contract = await this.contractRepo.findOneBy({ id: contractId });

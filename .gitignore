@@ -3,3 +3,15 @@ dist/
 .env
 *.log
 uploads/
+
+# Local deployment (contains passwords)
+.pgdata/
+start-pm2.bat
+ecosystem.config.js
+
+# Build artifacts
+*.tsbuildinfo
+deploy-package/
+
+# IDE & tools
+.claude/
